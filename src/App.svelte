@@ -5,7 +5,7 @@ import {load,save} from './db.js';
 import * as L from './lib.js';
 import I from './icons.js';
 import Item from './Item.svelte';
-const {iso,D,add,lab,cap,occ,st,late,dot,search,MOIS,JOURS}=L;
+const {iso,D,add,lab,cap,occ,st,late,cell,search,MOIS,JOURS}=L;
 const T=L.TODAY();
 let S={items:[],daily:[],checks:{}},ok=false,view='today',cur=T,from='',mm=D(T),dOpen=true;
 let sh=null,so=null,act='',form={},msg='',canUndo=false,undoS=[],needUp=false,upd;
@@ -16,6 +16,7 @@ $:wk=[0,1,2,3,4,5,6].map(i=>add(cur,i-(D(cur).getDay()+6)%7));
 $:grid=(()=>{const y=mm.getFullYear(),m=mm.getMonth();return{off:(new Date(y,m,1,12).getDay()+6)%7,days:[...Array(new Date(y,m+1,0).getDate())].map((_,j)=>iso(new Date(y,m,j+1,12)))}})();
 $:res=search(S.items,fq,fs,fper,T);
 $:checked=S.checks[T]||[];
+$:dur=form.end&&form.end>form.d?'Durée : '+(Math.round((D(form.end)-D(form.d))/864e5)+1)+' jours':'Un seul jour';
 
 onMount(async()=>{
   const s=await load();
@@ -31,16 +32,16 @@ function commit(fn,m){
   S=S;save(S);sh=null;if(m)flash(m,true);
 }
 function undo(){if(!undoS.length)return flash('Rien à annuler');S=JSON.parse(undoS.at(-1));undoS=undoS.slice(0,-1);save(S);sh=null;flash('Dernière modification annulée')}
-const mark=o=>commit(()=>{o.e.sts[o.d]='done'},'Marquée comme faite');
-const move=o=>commit(()=>{if(o.e.rec){o.e.skip.push(o.d);S.items.push({...o.e,id:L.uid(),d:T,rec:'',skip:[],sts:{}})}else{o.e.d=T;delete o.e.sts[o.d]}},'Reportée à aujourd’hui');
+const mark=o=>commit(()=>{o.e.sts[L.multi(o.e)?o.e.d:o.d]='done'},'Marquée comme faite');
+const move=o=>commit(()=>{if(o.e.rec){o.e.skip.push(o.d);S.items.push({...o.e,id:L.uid(),d:T,rec:'',skip:[],sts:{}})}else{const n=L.multi(o.e)?Math.round((D(o.e.end)-D(o.e.d))/864e5):0;o.e.d=T;if(n)o.e.end=add(T,n);delete o.e.sts[o.d]}},'Reportée à aujourd’hui');
 const del=(o,scope)=>commit(()=>{if(o.e.rec&&scope==='one')o.e.skip.push(o.d);else{o.e.del=1;o.e.delAt=Date.now()}},scope==='one'?'Ce rdv supprimé':'Supprimée');
 const restore=e=>commit(()=>{e.del=0;delete e.delAt},'Restaurée');
-function openForm(e,d,scope,title){const ed=e&&!title;form={id:ed?e.id:'',t:title??e?.t??'',d:ed?d:cur,h:ed?e.h:'09:00',note:ed?e.note:'',rec:ed?e.rec:'',scope,od:d};sh='form'}
+function openForm(e,d,scope,title){const ed=e&&!title;form={id:ed?e.id:'',t:title??e?.t??'',d:ed?d:cur,h:ed?e.h:'09:00',note:ed?e.note:'',rec:ed?e.rec:'',end:ed?e.end||'':'',scope,od:d};sh='form'}
 function saveForm(){
-  const f=form,t=f.t.trim()||'Sans titre',e=f.id&&S.items.find(x=>x.id===f.id);
-  if(!e)commit(()=>{S.items.push({id:L.uid(),t,d:f.d,h:f.h,note:f.note,rec:f.rec,skip:[],sts:{}});cur=f.d},'Action ajoutée');
-  else if(f.scope==='one')commit(()=>{e.skip.push(f.od);S.items.push({id:L.uid(),t,d:f.d,h:f.h,note:f.note,rec:'',skip:[],sts:{}})},'Ce rdv modifié, la série est intacte');
-  else commit(()=>{Object.assign(e,{t,d:f.d,h:f.h,note:f.note,rec:f.rec})},'Modification enregistrée');
+  const f=form,t=f.t.trim()||'Sans titre',rec=f.scope==='one'?'':f.rec,end=(f.end&&f.end>f.d&&!rec)?f.end:'',e=f.id&&S.items.find(x=>x.id===f.id);
+  if(!e)commit(()=>{S.items.push({id:L.uid(),t,d:f.d,h:f.h,note:f.note,rec,end,skip:[],sts:{}});cur=f.d},'Action ajoutée');
+  else if(f.scope==='one')commit(()=>{e.skip.push(f.od);S.items.push({id:L.uid(),t,d:f.d,h:f.h,note:f.note,rec:'',end,skip:[],sts:{}})},'Ce rdv modifié, la série est intacte');
+  else commit(()=>{Object.assign(e,{t,d:f.d,h:f.h,note:f.note,rec,end})},'Modification enregistrée');
 }
 function tog(id){S.checks[T]=checked.includes(id)?checked.filter(x=>x!==id):[...checked,id];S=S;save(S)}
 const addDaily=()=>{const v=form.nd?.trim();if(v){S.daily=[...S.daily,{id:L.uid(),t:v}];form.nd='';save(S)}};
@@ -60,13 +61,16 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
 
 {#if ok}
 <div class="app">
-  <div class="top"><span class="logo">Qwenagenda</span>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="c" viewBox="0 0 26 26"><path d="M2 24V8Q2 2 8 2H24" fill="none" stroke="#C9A227" stroke-width="1.5"/><path d="M6 24V10Q6 6 10 6H24" fill="none" stroke="#C9A227" stroke-width=".7" opacity=".6"/><circle cx="4" cy="4" r="1.6" fill="#C9A227"/></symbol></defs></svg>
+  {#each ['tl','tr','bl','br'] as c}<div class="fc fc-{c}"><svg width="26" height="26"><use href="#c"/></svg></div>{/each}
+  <div class="top"><div class="pf"><div class="ring"></div><div class="fill">Q</div></div><div class="bt"><div class="brand">QWENAGENDA</div><div class="sub">L’agenda de Qwenaëlle, en poche</div></div>
     <div class="ic">
       <button aria-label="Rechercher" on:click={()=>sh='search'}>{@html I.bS}</button>
       <button aria-label="Annuler la dernière modification" on:click={undo}>{@html I.bU}</button>
       <button aria-label="Corbeille" on:click={()=>sh='trash'}>{@html I.bT}</button>
       <button aria-label="Réglages" on:click={()=>sh='set'}>{@html I.bG}</button>
     </div></div>
+  <div class="rd"><span class="l"></span><span class="m">✦</span><span class="l"></span></div>
   <button class="sync off" on:click={()=>sh='set'}><i></i>Synchro non configurée</button>
 
   <main>
@@ -83,11 +87,13 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
       {/if}
       {#each list as o}<Item {o} {T} on:open={()=>{so=o;sh='det'}}/>{:else}<div class="empty">Rien de prévu ce jour-là.</div>{/each}
       {#if cur===T}
-        <div class="dh"><button class="dt" aria-expanded={dOpen} on:click={()=>dOpen=!dOpen}>Quotidien<span>{dOpen?'▾':'▸'}</span></button><button class="sm" on:click={()=>sh='daily'}>Modifier la liste</button></div>
-        <div class="dl" class:open={dOpen}>
+        <div class="rd" style="padding:0;margin:16px 0 14px"><span class="l"></span><span class="m">✦</span><span class="l"></span></div>
+        <button class="cat" class:open={dOpen} on:click={()=>dOpen=!dOpen}><span>Quotidien</span><span class="n">{S.daily.length}</span><span class="n">{dOpen?'▴':'▾'}</span></button>
+        {#if dOpen}
           {#each S.daily as x}<button class="chk" class:on={checked.includes(x.id)} on:click={()=>tog(x.id)}><span>{checked.includes(x.id)?'✓':''}</span><b>{x.t}</b></button>
-          {:else}<div class="empty">Aucune action quotidienne. Ajoute-en avec « Modifier la liste ».</div>{/each}
-        </div>
+          {:else}<div class="mu" style="margin:0 0 8px">Aucune action quotidienne.</div>{/each}
+          <div style="margin:0 0 8px"><button class="sm" on:click={()=>sh='daily'}>Modifier la liste</button></div>
+        {/if}
       {:else if from!=='week'}<div class="btns"><button on:click={()=>cur=T}>Revenir à aujourd’hui</button></div>{/if}
 
     {:else if view==='week'}
@@ -105,8 +111,8 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
         {#each ['L','M','M','J','V','S','D'] as j}<div class="h">{j}</div>{/each}
         {#each Array(grid.off) as _}<div></div>{/each}
         {#each grid.days as dd}
-          {@const k=dot(S.items,dd,T)}
-          <button class="d" class:today={dd===T} class:sel={dd===cur} on:click={()=>cur=dd}>{D(dd).getDate()}{#if k}<i class={k==='m'?'':k}></i>{/if}</button>
+          {@const c=cell(S.items,dd,T)}
+          <button class="d" class:today={dd===T} class:sel={dd===cur} on:click={()=>cur=dd}>{D(dd).getDate()}{#each c.bars as b,i}<b class="sp {b.c}" style="bottom:{14+i*5}px;background:{b.col}"></b>{/each}{#if c.pts.length}<span class="dots">{#each c.pts as k}<i class={k}></i>{/each}</span>{/if}</button>
         {/each}
       </div>
       <div class="h3">{lab(cur)}</div>
@@ -122,7 +128,7 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
   {#if sh}
   <div class="ov on" role="presentation" on:click|self={()=>sh=null}><div class="sh">
     {#if sh==='det'}
-      <h2>{so.e.t}</h2><p>{cap(lab(so.d))} à {so.e.h}{so.e.rec?' · chaque semaine':''} · {st(so,T)}</p>{#if so.e.note}<p>{so.e.note}</p>{/if}
+      <h2>{so.e.t}</h2><p>{cap(lab(so.d))} à {so.e.h}{so.e.end&&so.e.end!==so.e.d?' · jusqu’au '+lab(so.e.end):''}{so.e.rec?' · chaque semaine':''} · {st(so,T)}</p>{#if so.e.note}<p>{so.e.note}</p>{/if}
       <div class="btns"><div class="row2"><button class="ok" on:click={()=>mark(so)}>Fait</button><button class="gold" on:click={()=>move(so)}>Reporter</button></div>
         <button on:click={()=>{if(so.e.rec){act='edit';sh='scope'}else openForm(so.e,so.d,'all')}}>Modifier</button>
         <button on:click={()=>openForm(so.e,so.d,'',so.e.t)}>Dupliquer</button>
@@ -134,6 +140,7 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
       <h2>{form.id?'Modifier':'Nouvelle action'}</h2>
       <label for="f1">Intitulé</label><input id="f1" bind:value={form.t}>
       <div class="row2"><div><label for="f2">Date</label><input id="f2" type="date" bind:value={form.d}></div><div><label for="f3">Heure</label><input id="f3" type="time" bind:value={form.h}></div></div>
+      <label for="f6">Jusqu’au (facultatif)</label><input id="f6" type="date" min={form.d} bind:value={form.end}><div class="mu" style="margin-top:4px">{dur}</div>
       {#if form.scope!=='one'}<label for="f4">Répéter</label><select id="f4" bind:value={form.rec}><option value="">Jamais</option><option value="Chaque semaine">Chaque semaine</option></select>{/if}
       <label for="f5">Notes</label><input id="f5" placeholder="Facultatif" bind:value={form.note}>
       <div class="btns"><button class="gold" on:click={saveForm}>Enregistrer</button><button on:click={()=>sh=null}>Annuler</button></div>
@@ -161,7 +168,7 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
       <label for="sa">Adresse de Qwenaëlle</label><input id="sa" placeholder="https://….ts.net" disabled>
       <p>La synchronisation s’activera quand Qwenaëlle sera prête. En attendant, utilise l’export.</p>
       <div class="h3">Crédits</div>
-      <div class="kv"><span>Qwenagenda</span><span>version 0.1</span></div><div class="kv"><span>Code</span><span>Codé par Caude</span></div><div class="kv"><span>Design</span><span>Clio</span></div>
+      <div class="kv"><span>Qwenagenda</span><span>version 0.2</span></div><div class="kv"><span>Code</span><span>Codé par Caude</span></div><div class="kv"><span>Design</span><span>Clio</span></div>
       <div class="kv"><span>GitHub</span><span><a href="https://github.com/Caldheron" target="_blank" rel="noopener">Caldheron</a></span></div><div class="kv"><span>Polices</span><span>Cinzel et EB Garamond (SIL OFL)</span></div>
       <div class="btns"><button on:click={()=>sh=null}>Fermer</button></div>
     {/if}

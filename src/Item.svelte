@@ -1,2 +1,2 @@
-<script>import {createEventDispatcher} from 'svelte';import {st} from './lib.js';export let o,T;const dp=createEventDispatcher();$:s=st(o,T)</script>
-<button class="it" class:fait={s==='fait'} class:manque={s==='manqué'} on:click={()=>dp('open')}><span class="t">{o.e.h}</span><b>{o.e.t}{o.e.rec?' ↻':''}</b><span class="chip {s==='à faire'?'todo':s}">{s}</span></button>
+<script>import {createEventDispatcher} from 'svelte';import {st,span} from './lib.js';export let o,T;const dp=createEventDispatcher();$:s=st(o,T);$:sp=span(o)</script>
+<button class="it" class:fait={s==='fait'} class:manque={s==='manqué'} on:click={()=>dp('open')}><span class="t">{o.e.h}</span><b>{o.e.t}{o.e.rec?' ↻':''}{#if sp} <small style="color:var(--dim);font-weight:400">· jour {sp[0]}/{sp[1]}</small>{/if}</b><span class="chip {s==='à faire'?'todo':s}">{s}</span></button>
