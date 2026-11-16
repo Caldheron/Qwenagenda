@@ -27,7 +27,7 @@ export const search=(items,q,s,per,T)=>items.filter(e=>!e.del&&(!q||(e.t+' '+(e.
 // --- Export / import ---
 const esc=s=>(s||'').replace(/[\\;,]/g,m=>'\\'+m).replace(/\n/g,'\\n'),unesc=s=>s.replace(/\\n/gi,'\n').replace(/\\([\\;,])/g,'$1');
 const dt=(d,h)=>d.replace(/-/g,'')+'T'+h.replace(':','')+'00';
-export const toICS=items=>['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Qwenagenda//FR',...items.filter(e=>!e.del).flatMap(e=>['BEGIN:VEVENT','UID:'+e.id,'DTSTAMP:'+new Date().toISOString().replace(/[-:]|\.\d+/g,''),...(multi(e)?['DTSTART;VALUE=DATE:'+e.d.replace(/-/g,''),'DTEND;VALUE=DATE:'+add(e.end,1).replace(/-/g,'')]:['DTSTART;TZID=Europe/Paris:'+dt(e.d,e.h)]),'SUMMARY:'+esc(e.t),...(e.note?['DESCRIPTION:'+esc(e.note)]:[]),...(e.rec?['RRULE:FREQ=WEEKLY']:[]),...e.skip.map(d=>'EXDATE;TZID=Europe/Paris:'+dt(d,e.h)),'END:VEVENT']),'END:VCALENDAR'].join('\r\n');
+export const toICS=items=>['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Clepsydre//FR',...items.filter(e=>!e.del).flatMap(e=>['BEGIN:VEVENT','UID:'+e.id,'DTSTAMP:'+new Date().toISOString().replace(/[-:]|\.\d+/g,''),...(multi(e)?['DTSTART;VALUE=DATE:'+e.d.replace(/-/g,''),'DTEND;VALUE=DATE:'+add(e.end,1).replace(/-/g,'')]:['DTSTART;TZID=Europe/Paris:'+dt(e.d,e.h)]),'SUMMARY:'+esc(e.t),...(e.note?['DESCRIPTION:'+esc(e.note)]:[]),...(e.rec?['RRULE:FREQ=WEEKLY']:[]),...e.skip.map(d=>'EXDATE;TZID=Europe/Paris:'+dt(d,e.h)),'END:VEVENT']),'END:VCALENDAR'].join('\r\n');
 export function fromICS(txt,items){const out=[...items];let n=0,bad=0,c=null;
 for(const l of txt.replace(/\r?\n[ \t]/g,'').split(/\r?\n/)){
  if(l==='BEGIN:VEVENT')c={};
@@ -39,6 +39,6 @@ for(const l of txt.replace(/\r?\n[ \t]/g,'').split(/\r?\n/)){
   else if(k==='RRULE'){if(/FREQ=WEEKLY/.test(v)&&!/INTERVAL=([2-9]|\d\d)/.test(v)&&!/BYDAY=.*,/.test(v))c.rec='Chaque semaine';else c.bad=1}}}
 return{items:out,n,bad}}
 // JSON versionné (version 1) : refuse une version inconnue
-export function fromJSON(txt,S){const j=JSON.parse(txt);if(j.app!=='qwenagenda')throw new Error('ce n’est pas un export Qwenagenda');if(j.version>1)throw new Error('version '+j.version+' inconnue');
+export function fromJSON(txt,S){const j=JSON.parse(txt);if(j.app!=='qwenagenda'&&j.app!=='clepsydre')throw new Error('ce n’est pas un export Clepsydre');if(j.version>1)throw new Error('version '+j.version+' inconnue');
 const m=new Map(S.items.map(e=>[e.id,e]));let n=0;for(const e of j.items){const o=m.get(e.id);if(!o||(e.mod||0)>(o.mod||0)){m.set(e.id,e);n++}}
 return{items:[...m.values()],daily:S.daily.length?S.daily:j.daily,checks:{...j.checks,...S.checks},n,bad:0}}

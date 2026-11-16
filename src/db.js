@@ -2,3 +2,6 @@
 const open=()=>new Promise((res,rej)=>{const r=indexedDB.open('qwenagenda',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
 export async function load(){const db=await open();return new Promise(res=>{const q=db.transaction('kv').objectStore('kv').get('state');q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)})}
 export async function save(s){const db=await open();db.transaction('kv','readwrite').objectStore('kv').put(JSON.parse(JSON.stringify(s)),'state')}
+// Réglages et suivi de la synchro avec Céleste (même base, autre clé : l'agenda lui-même n'est pas touché)
+export async function loadMeta(){const db=await open();return new Promise(res=>{const q=db.transaction('kv').objectStore('kv').get('sync');q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)})}
+export async function saveMeta(m){const db=await open();db.transaction('kv','readwrite').objectStore('kv').put(JSON.parse(JSON.stringify(m)),'sync')}

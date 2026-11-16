@@ -1,13 +1,15 @@
 <script>
 import {onMount} from 'svelte';
 import {registerSW} from 'virtual:pwa-register';
-import {load,save} from './db.js';
+import {load,save,loadMeta,saveMeta} from './db.js';
+import {runSync,status,newMeta} from './sync.js';
+import BRAND from './brand.js';
 import * as L from './lib.js';
 import I from './icons.js';
 import Item from './Item.svelte';
 const {iso,D,add,lab,cap,occ,st,late,cell,search,MOIS,JOURS}=L;
 const T=L.TODAY();
-let S={items:[],daily:[],checks:{}},ok=false,view='today',cur=T,from='',mm=D(T),dOpen=true;
+let S={items:[],daily:[],checks:{},dailyMod:0,checksMod:{}},M=newMeta(),syncing=false,fUrl='',fKey='',ok=false,view='today',cur=T,from='',mm=D(T),dOpen=true;
 let sh=null,so=null,act='',form={},msg='',canUndo=false,undoS=[],needUp=false,upd;
 let fq='',fs='Tous',fper='Tout',fileEl;
 $:list=occ(S.items,cur);
@@ -16,22 +18,56 @@ $:wk=[0,1,2,3,4,5,6].map(i=>add(cur,i-(D(cur).getDay()+6)%7));
 $:grid=(()=>{const y=mm.getFullYear(),m=mm.getMonth();return{off:(new Date(y,m,1,12).getDay()+6)%7,days:[...Array(new Date(y,m+1,0).getDate())].map((_,j)=>iso(new Date(y,m,j+1,12)))}})();
 $:res=search(S.items,fq,fs,fper,T);
 $:checked=S.checks[T]||[];
+$:syncSt=status(S,M);
 $:dur=form.end&&form.end>form.d?'Durée : '+(Math.round((D(form.end)-D(form.d))/864e5)+1)+' jours':'Un seul jour';
 
 onMount(async()=>{
-  const s=await load();
-  if(s){S=s;S.items=S.items.filter(e=>!(e.del&&Date.now()-e.delAt>30*864e5))} // purge après 30 jours
+  const s=await load(),m=await loadMeta();
+  if(s){S={dailyMod:0,checksMod:{},...s};S.items=S.items.filter(e=>!(e.del&&Date.now()-e.delAt>30*864e5))} // purge après 30 jours
+  if(m)M={...newMeta(),...m};
   ok=true;upd=registerSW({onNeedRefresh(){needUp=true}});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')doSync()});
+  setInterval(()=>{if(document.visibilityState==='visible')doSync()},60000);
+  doSync();
 });
+// Synchronisation avec Céleste : à l'ouverture, au retour sur l'appli, toutes les minutes, 4 s après une modification, et via le bouton
+async function doSync(quiet=true){
+  if(syncing||!M.url||!M.key)return;
+  syncing=true;
+  try{
+    const r=await runSync(S,M);
+    S=S;M=M;save(S);saveMeta(M);
+    if(!r.ok){if(!quiet)flash(r.message);return}
+    if(r.conflicts.length)flash('Conflit de synchro : voir l’accueil');else if(!quiet)flash('Synchronisé ✔ '+r.sent+' envoyée(s), '+r.received+' reçue(s)');
+  }finally{syncing=false}
+}
+const autoSync=()=>{clearTimeout(autoSync.t);autoSync.t=setTimeout(()=>doSync(),4000)};
+const ackConflicts=()=>{M.conflicts=[];M=M;saveMeta(M)};
+function openSet(){fUrl=M.url;fKey=M.key;sh='set'}
+async function saveSync(){
+  const u=fUrl.trim().replace(/\/+$/,''),k=fKey.trim();
+  if(u){try{if(new URL(u).protocol!=='https:')throw 0}catch{flash('Adresse invalide : https:// requis');return}}
+  M.url=u;M.key=k;M.err=null;M=M;await saveMeta(M);flash(u&&k?'Réglages enregistrés':'Réglages enregistrés (incomplets)');
+  if(u&&k)doSync(false);
+}
 function flash(m,u=false){msg=m;canUndo=u;clearTimeout(flash.t);flash.t=setTimeout(()=>msg='',4000)}
 // Toute modification passe par commit : annulation (20 niveaux), sauvegarde, tampon modifié_le/révision
 function commit(fn,m){
   const snap=JSON.stringify(S);undoS=[...undoS.slice(-19),snap];fn();
   const prev=new Map(JSON.parse(snap).items.map(e=>[e.id,JSON.stringify(e)]));
   for(const e of S.items){const q=prev.get(e.id);if(q!==JSON.stringify(e)){e.mod=Date.now();e.rev=(q?JSON.parse(q).rev||0:0)+1}}
-  S=S;save(S);sh=null;if(m)flash(m,true);
+  S=S;save(S);sh=null;if(m)flash(m,true);autoSync();
 }
-function undo(){if(!undoS.length)return flash('Rien à annuler');S=JSON.parse(undoS.at(-1));undoS=undoS.slice(0,-1);save(S);sh=null;flash('Dernière modification annulée')}
+function undo(){
+  if(!undoS.length)return flash('Rien à annuler');
+  const before=new Map(S.items.map(e=>[e.id,JSON.stringify(e)])),now=Date.now();
+  S={dailyMod:0,checksMod:{},...JSON.parse(undoS.at(-1))};undoS=undoS.slice(0,-1);
+  const keep=new Set(S.items.map(e=>e.id));
+  for(const e of S.items)if(before.get(e.id)!==JSON.stringify(e))e.mod=now;
+  for(const [id,j] of before)if(!keep.has(id))S.items.push({...JSON.parse(j),del:1,delAt:now,mod:now});
+  S.dailyMod=now;S.checksMod={...S.checksMod,[T]:now};
+  save(S);sh=null;flash('Dernière modification annulée');autoSync();
+}
 const mark=o=>commit(()=>{o.e.sts[L.multi(o.e)?o.e.d:o.d]='done'},'Marquée comme faite');
 const move=o=>commit(()=>{if(o.e.rec){o.e.skip.push(o.d);S.items.push({...o.e,id:L.uid(),d:T,rec:'',skip:[],sts:{}})}else{const n=L.multi(o.e)?Math.round((D(o.e.end)-D(o.e.d))/864e5):0;o.e.d=T;if(n)o.e.end=add(T,n);delete o.e.sts[o.d]}},'Reportée à aujourd’hui');
 const del=(o,scope)=>commit(()=>{if(o.e.rec&&scope==='one')o.e.skip.push(o.d);else{o.e.del=1;o.e.delAt=Date.now()}},scope==='one'?'Ce rdv supprimé':'Supprimée');
@@ -43,12 +79,13 @@ function saveForm(){
   else if(f.scope==='one')commit(()=>{e.skip.push(f.od);S.items.push({id:L.uid(),t,d:f.d,h:f.h,note:f.note,rec:'',end,skip:[],sts:{}})},'Ce rdv modifié, la série est intacte');
   else commit(()=>{Object.assign(e,{t,d:f.d,h:f.h,note:f.note,rec,end})},'Modification enregistrée');
 }
-function tog(id){S.checks[T]=checked.includes(id)?checked.filter(x=>x!==id):[...checked,id];S=S;save(S)}
-const addDaily=()=>{const v=form.nd?.trim();if(v){S.daily=[...S.daily,{id:L.uid(),t:v}];form.nd='';save(S)}};
-const rmDaily=i=>{S.daily=S.daily.filter((_,j)=>j!==i);save(S)};
+function tog(id){S.checks[T]=checked.includes(id)?checked.filter(x=>x!==id):[...checked,id];S.checksMod={...S.checksMod,[T]:Date.now()};S=S;save(S);autoSync()}
+const chDaily=()=>{S.dailyMod=Date.now();S=S;save(S);autoSync()};
+const addDaily=()=>{const v=form.nd?.trim();if(v){S.daily=[...S.daily,{id:L.uid(),t:v}];form.nd='';chDaily()}};
+const rmDaily=i=>{S.daily=S.daily.filter((_,j)=>j!==i);chDaily()};
 function dl(name,type,txt){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type}));a.download=name;a.click()}
-const exJSON=()=>dl('qwenagenda-'+T+'.json','application/json',JSON.stringify({app:'qwenagenda',version:1,exportedAt:new Date().toISOString(),items:S.items,daily:S.daily,checks:S.checks},null,1));
-const exICS=()=>dl('qwenagenda-'+T+'.ics','text/calendar',L.toICS(S.items));
+const exJSON=()=>dl('clepsydre-'+T+'.json','application/json',JSON.stringify({app:'qwenagenda',version:1,exportedAt:new Date().toISOString(),items:S.items,daily:S.daily,checks:S.checks},null,1));
+const exICS=()=>dl('clepsydre-'+T+'.ics','text/calendar',L.toICS(S.items));
 async function imp(ev){
   const f=ev.target.files[0];if(!f)return;let r;
   try{const txt=await f.text();r=f.name.toLowerCase().endsWith('.ics')?L.fromICS(txt,S.items):L.fromJSON(txt,S)}catch(e){flash('Import impossible : '+e.message);return}
@@ -63,18 +100,26 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
 <div class="app">
   <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="c" viewBox="0 0 26 26"><path d="M2 24V8Q2 2 8 2H24" fill="none" stroke="#C9A227" stroke-width="1.5"/><path d="M6 24V10Q6 6 10 6H24" fill="none" stroke="#C9A227" stroke-width=".7" opacity=".6"/><circle cx="4" cy="4" r="1.6" fill="#C9A227"/></symbol></defs></svg>
   {#each ['tl','tr','bl','br'] as c}<div class="fc fc-{c}"><svg width="26" height="26"><use href="#c"/></svg></div>{/each}
-  <div class="top"><div class="pf"><div class="ring"></div><div class="fill">Q</div></div><div class="bt"><div class="brand">QWENAGENDA</div><div class="sub">L’agenda de Qwenaëlle, en poche</div></div>
+  <div class="top"><div class="pf" role="img" aria-label="Icône Clepsydre">{@html BRAND}</div><div class="bt"><div class="brand">CLEPSYDRE</div><div class="sub">L’agenda de Céleste, en poche</div></div>
     <div class="ic">
       <button aria-label="Rechercher" on:click={()=>sh='search'}>{@html I.bS}</button>
       <button aria-label="Annuler la dernière modification" on:click={undo}>{@html I.bU}</button>
       <button aria-label="Corbeille" on:click={()=>sh='trash'}>{@html I.bT}</button>
-      <button aria-label="Réglages" on:click={()=>sh='set'}>{@html I.bG}</button>
+      <button aria-label="Réglages" on:click={openSet}>{@html I.bG}</button>
     </div></div>
   <div class="rd"><span class="l"></span><span class="m">✦</span><span class="l"></span></div>
-  <button class="sync off" on:click={()=>sh='set'}><i></i>Synchro non configurée</button>
+  <button class="sync {syncSt.state}" on:click={openSet}><i></i>{syncSt.text}</button>
 
   <main>
     {#if needUp}<div class="ban ok">Nouvelle version disponible <button class="sm gold" on:click={()=>upd(true)}>Mettre à jour</button></div>{/if}
+    {#if M.conflicts.length}
+      <div class="ban late">
+        {#each M.conflicts.slice(-3) as c}<div style="margin-bottom:6px">Conflit sur « {c.title||'Sans titre'} » ({c.domain==='quotidien'?'liste quotidienne':'agenda'}) : la version la plus récente a été gardée ({c.kept==='telephone'?'celle du téléphone':'celle de Céleste'}).
+          {#if c.domain==='quotidien'}<br><small>Version remplacée : {(c.detail.perdu||[]).join(', ')||'liste vide'}</small>{:else if c.detail.perdu}<br><small>Version remplacée : {c.detail.perdu.t}, {lab(c.detail.perdu.d)} à {c.detail.perdu.h}</small>{/if}</div>{/each}
+        {#if M.conflicts.length>3}<div class="mu">… et {M.conflicts.length-3} autre(s).</div>{/if}
+        <div class="late-row"><span></span><button class="sm gold" on:click={ackConflicts}>Compris</button></div>
+      </div>
+    {/if}
     {#if view==='today'}
       {#if from==='week'}<button class="sm" on:click={()=>{view='week';from=''}}>‹ Retour à la semaine</button>{/if}
       <h2>{cap(lab(cur))}</h2>
@@ -155,20 +200,23 @@ const prevM=n=>mm=new Date(mm.getFullYear(),mm.getMonth()+n,1,12);
       <div class="btns"><button on:click={()=>sh=null}>Fermer</button></div>
     {:else if sh==='daily'}
       <h2>Actions quotidiennes</h2><p>Elles se remettent à zéro chaque jour.</p>
-      {#each S.daily as x,i}<div class="row2 er"><input aria-label="Intitulé" bind:value={x.t} on:change={()=>save(S)}><button class="sm" aria-label="Retirer" on:click={()=>rmDaily(i)}>✕</button></div>{/each}
+      {#each S.daily as x,i}<div class="row2 er"><input aria-label="Intitulé" bind:value={x.t} on:change={chDaily}><button class="sm" aria-label="Retirer" on:click={()=>rmDaily(i)}>✕</button></div>{/each}
       <div class="row2 er"><input placeholder="Nouvelle action quotidienne" aria-label="Nouvelle action" bind:value={form.nd}><button class="sm ok" on:click={addDaily}>Ajouter</button></div>
-      <div class="btns"><button class="gold" on:click={()=>{S=S;save(S);sh=null}}>Terminer</button></div>
+      <div class="btns"><button class="gold" on:click={()=>{S=S;save(S);sh=null;autoSync()}}>Terminer</button></div>
     {:else if sh==='set'}
       <h2>Réglages</h2>
       <div class="h3" style="margin-top:4px">Import et export</div>
       <div class="btns" style="margin-top:0"><button on:click={exJSON}>Exporter tout (JSON)</button><button on:click={exICS}>Exporter en .ics</button><button on:click={()=>fileEl.click()}>Importer un fichier (.json ou .ics)</button></div>
       <input type="file" accept=".json,.ics" hidden bind:this={fileEl} on:change={imp}>
       <div class="h3">Synchronisation</div>
-      <div class="kv"><span>État</span><span>Non configurée</span></div>
-      <label for="sa">Adresse de Qwenaëlle</label><input id="sa" placeholder="https://….ts.net" disabled>
-      <p>La synchronisation s’activera quand Qwenaëlle sera prête. En attendant, utilise l’export.</p>
+      <div class="kv"><span>État</span><span>{syncSt.text}</span></div>
+      {#if syncSt.detail}<div class="mu" style="margin-bottom:6px">{syncSt.detail}</div>{/if}
+      <label for="sa">Adresse de Céleste</label><input id="sa" type="url" inputmode="url" placeholder="https://….ts.net" bind:value={fUrl}>
+      <label for="sk">Clé de synchro</label><input id="sk" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={fKey}>
+      <p>L’adresse Tailscale et la clé s’affichent dans Céleste (clic sur le médaillon Clepsydre). Elles restent sur ce téléphone. En cas d’action modifiée des deux côtés, la plus récente gagne et tu en es informé sur l’accueil.</p>
+      <div class="btns" style="margin-top:0"><button class="gold" on:click={saveSync}>Enregistrer</button><button on:click={()=>doSync(false)} disabled={!syncSt.ready||syncing}>Synchroniser</button></div>
       <div class="h3">Crédits</div>
-      <div class="kv"><span>Qwenagenda</span><span>version 0.2</span></div><div class="kv"><span>Code</span><span>Codé par Caude</span></div><div class="kv"><span>Design</span><span>Clio</span></div>
+      <div class="kv"><span>Clepsydre</span><span>version 0.3</span></div><div class="kv"><span>Code</span><span>Codé par Caude</span></div><div class="kv"><span>Design</span><span>Clio</span></div>
       <div class="kv"><span>GitHub</span><span><a href="https://github.com/Caldheron" target="_blank" rel="noopener">Caldheron</a></span></div><div class="kv"><span>Polices</span><span>Cinzel et EB Garamond (SIL OFL)</span></div>
       <div class="btns"><button on:click={()=>sh=null}>Fermer</button></div>
     {/if}
